@@ -36,6 +36,7 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
         weight_name: str,
         subfolder: str = '',
         trigger_word: str = 'img',
+        trigger_word2: str = 'img2',
         **kwargs,
     ):
         """
@@ -108,6 +109,7 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
             raise ValueError("Required keys are (`id_encoder` and `lora_weights`) missing from the state dict.")
 
         self.trigger_word = trigger_word
+        self.trigger_word2 = trigger_word2
         # load finetuned CLIP image encoder and fuse module here if it has not been registered to the pipeline yet
         print(f"Loading PhotoMaker components [1] id_encoder from [{pretrained_model_name_or_path_or_dict}]...")
         id_encoder = PhotoMakerIDEncoder()
@@ -122,8 +124,8 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
 
         # Add trigger word token
         if self.tokenizer is not None: 
-            self.tokenizer.add_tokens([self.trigger_word], special_tokens=True)
-        
+            self.tokenizer.add_tokens([self.trigger_word, self.trigger_word2], special_tokens=True)
+
         self.tokenizer_2.add_tokens([self.trigger_word], special_tokens=True)
         
 
@@ -214,7 +216,9 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
         prompt_embeds = prompt_embeds.to(dtype=self.text_encoder_2.dtype, device=device)
         class_tokens_mask = class_tokens_mask.to(device=device) # TODO: ignoring two-prompt case
 
-        return prompt_embeds, pooled_prompt_embeds, class_tokens_mask
+        # return prompt_embeds, pooled_prompt_embeds, class_tokens_mask
+        return prompt_embeds, prompt_embeds2, class_tokens_mask, class_tokens_mask2
+
 
 
     @torch.no_grad()
@@ -248,6 +252,7 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
         callback_steps: int = 1,
         # Added parameters (for PhotoMaker)
         input_id_images: PipelineImageInput = None,
+        input_id_images2: PipelineImageInput = None,
         start_merge_step: int = 0, # TODO: change to `style_strength_ratio` in the future
         class_tokens_mask: Optional[torch.LongTensor] = None,
         prompt_embeds_text_only: Optional[torch.FloatTensor] = None,
