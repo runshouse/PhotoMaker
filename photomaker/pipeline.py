@@ -150,6 +150,7 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
 
         # Find the token id of the trigger word
         image_token_id = self.tokenizer_2.convert_tokens_to_ids(self.trigger_word)
+        image_token_id2 = self.tokenizer.convert_tokens_to_ids(self.trigger_word2)
 
         # Define tokenizers and text encoders
         tokenizers = [self.tokenizer, self.tokenizer_2] if self.tokenizer is not None else [self.tokenizer_2]
@@ -201,17 +202,28 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
                 clean_input_ids = torch.tensor(clean_input_ids, dtype=torch.long).unsqueeze(0)
                 class_tokens_mask = torch.tensor(class_tokens_mask, dtype=torch.bool).unsqueeze(0)
                 
-                prompt_embeds = text_encoder(
-                    clean_input_ids.to(device),
-                    output_hidden_states=True,
-                )
+                # prompt_embeds = text_encoder(
+                #     clean_input_ids.to(device),
+                #     output_hidden_states=True,
+                # )
 
-                # We are only ALWAYS interested in the pooled output of the final text encoder
-                pooled_prompt_embeds = prompt_embeds[0]
-                prompt_embeds = prompt_embeds.hidden_states[-2]
-                prompt_embeds_list.append(prompt_embeds)
+                # # We are only ALWAYS interested in the pooled output of the final text encoder
+                # pooled_prompt_embeds = prompt_embeds[0]
+                # prompt_embeds = prompt_embeds.hidden_states[-2]
+                # prompt_embeds_list.append(prompt_embeds)
+                prompt_embeds_result = text_encoders[idx](
+                    clean_input_ids,
+                    output_hidden_states=True
+                )
+        
+                # Extract embeddings and pooled output
+                pooled_output = prompt_embeds_result[0]
+                embeddings = prompt_embeds_result.hidden_states[-2]
+        
+                prompt_embeds_results.append((embeddings, pooled_output))
 
             prompt_embeds = torch.concat(prompt_embeds_list, dim=-1)
+            prompt_embeds2, pooled_prompt_embeds2 = prompt_embeds_results[1]
 
         prompt_embeds = prompt_embeds.to(dtype=self.text_encoder_2.dtype, device=device)
         class_tokens_mask = class_tokens_mask.to(device=device) # TODO: ignoring two-prompt case
