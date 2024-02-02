@@ -107,7 +107,9 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
         if keys != ["id_encoder", "lora_weights"]:
             raise ValueError("Required keys are (`id_encoder` and `lora_weights`) missing from the state dict.")
 
-        self.trigger_word = trigger_word
+        self.trigger_word = 'img'
+        self.trigger_word2 = 'img2'
+
         # load finetuned CLIP image encoder and fuse module here if it has not been registered to the pipeline yet
         print(f"Loading PhotoMaker components [1] id_encoder from [{pretrained_model_name_or_path_or_dict}]...")
         id_encoder = PhotoMakerIDEncoder()
@@ -121,10 +123,11 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
         self.load_lora_weights(state_dict["lora_weights"], adapter_name="photomaker")
 
         # Add trigger word token
-        if self.tokenizer is not None: 
-            self.tokenizer.add_tokens([self.trigger_word], special_tokens=True)
+        if self.tokenizer is not None:
+          self.tokenizer.add_tokens([self.trigger_word, self.trigger_word2], special_tokens=True)
         
-        self.tokenizer_2.add_tokens([self.trigger_word], special_tokens=True)
+        self.tokenizer_2.add_tokens([self.trigger_word, self.trigger_word2], special_tokens=True)
+
         
 
     def encode_prompt_with_trigger_word(
@@ -147,7 +150,9 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
             batch_size = prompt_embeds.shape[0]
 
         # Find the token id of the trigger word
-        image_token_id = self.tokenizer_2.convert_tokens_to_ids(self.trigger_word)
+        image_token_id = self.tokenizer_2.convert_tokens_to_ids(self.trigger_word) 
+        image_token_id2 = self.tokenizer_2.convert_tokens_to_ids(self.trigger_word2)
+
 
         # Define tokenizers and text encoders
         tokenizers = [self.tokenizer, self.tokenizer_2] if self.tokenizer is not None else [self.tokenizer_2]
@@ -166,12 +171,19 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
                 class_token_index = []
                 # Find out the corrresponding class word token based on the newly added trigger word token
                 for i, token_id in enumerate(input_ids):
-                    if token_id == image_token_id:
-                        class_token_index.append(clean_index - 1)
-                    else:
-                        clean_input_ids.append(token_id)
-                        clean_index += 1
-
+                    # if token_id == image_token_id:
+                    #     class_token_index.append(clean_index - 1)
+                    # else:
+                    #     clean_input_ids.append(token_id)
+                    #     clean_index += 1
+                  if token_id == image_token_id:
+                    class_token_index1.append(clean_index - 1) 
+                  elif token_id == image_token_id2:
+                    class_token_index2.append(clean_index - 1)
+                  else:
+                    clean_input_ids.append(token_id)
+                    clean_index += 1
+      
                 if len(class_token_index) != 1:
                     raise ValueError(
                         f"PhotoMaker currently does not support multiple trigger words in a single prompt.\
@@ -180,10 +192,13 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
                 class_token_index = class_token_index[0]
 
                 # Expand the class word token and corresponding mask
-                class_token = clean_input_ids[class_token_index]
-                clean_input_ids = clean_input_ids[:class_token_index] + [class_token] * num_id_images + \
-                    clean_input_ids[class_token_index+1:]                
-                    
+                class_token1 = clean_input_ids[class_token_index1[0]]
+                class_token2 = clean_input_ids[class_token_index2[0]]
+
+                clean_input_ids = clean_input_ids[:class_token_index1[0]] + 
+                  [class_token1] * num_images1 + clean_input_ids[class_token_index1[0]+1:class_token_index2[0]] +
+                  [class_token2] * num_images2 + clean_input_ids[class_token_index2[0]+1:]
+
                 # Truncation or padding
                 max_len = tokenizer.model_max_length
                 if len(clean_input_ids) > max_len:
@@ -197,8 +212,10 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
                      for i in range(len(clean_input_ids))]
                 
                 clean_input_ids = torch.tensor(clean_input_ids, dtype=torch.long).unsqueeze(0)
-                class_tokens_mask = torch.tensor(class_tokens_mask, dtype=torch.bool).unsqueeze(0)
-                
+
+                class_tokens_mask1 = [True if class_token_index1[0] <= i < class_token_index1[0]+num_images1 else False for i in range(len(clean_input_ids))]
+                class_tokens_mask2 = [True if class_token_index2[0] <= i < class_token_index2[0]+num_images2 else False for i in range(len(clean_input_ids))]
+
                 prompt_embeds = text_encoder(
                     clean_input_ids.to(device),
                     output_hidden_states=True,
@@ -376,8 +393,10 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
         id_pixel_values = id_pixel_values.unsqueeze(0).to(device=device, dtype=dtype) # TODO: multiple prompts
 
         # 6. Get the update text embedding with the stacked ID embedding
-        prompt_embeds = self.id_encoder(id_pixel_values, prompt_embeds, class_tokens_mask)
-        
+        # prompt_embeds = self.id_encoder(id_pixel_values, prompt_embeds, class_tokens_mask)
+        prompt_embeds = id_encoder(torch.cat([image_embeddings1, image_embeddings2]), prompt_embeds, 
+                           torch.cat([class_tokens_mask1, class_tokens_mask2]))
+
         bs_embed, seq_len, _ = prompt_embeds.shape
         # duplicate text embeddings for each generation per prompt, using mps friendly method
         prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
