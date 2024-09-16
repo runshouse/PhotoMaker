@@ -36,6 +36,7 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
         weight_name: str,
         subfolder: str = '',
         trigger_word: str = 'img',
+        trigger_word2: str = 'img2',
         **kwargs,
     ):
         """
@@ -108,6 +109,7 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
             raise ValueError("Required keys are (`id_encoder` and `lora_weights`) missing from the state dict.")
 
         self.trigger_word = trigger_word
+        self.trigger_word2 = trigger_word2
         # load finetuned CLIP image encoder and fuse module here if it has not been registered to the pipeline yet
         print(f"Loading PhotoMaker components [1] id_encoder from [{pretrained_model_name_or_path_or_dict}]...")
         id_encoder = PhotoMakerIDEncoder()
@@ -122,8 +124,8 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
 
         # Add trigger word token
         if self.tokenizer is not None: 
-            self.tokenizer.add_tokens([self.trigger_word], special_tokens=True)
-        
+            self.tokenizer.add_tokens([self.trigger_word, self.trigger_word2], special_tokens=True)
+
         self.tokenizer_2.add_tokens([self.trigger_word], special_tokens=True)
         
 
@@ -148,6 +150,7 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
 
         # Find the token id of the trigger word
         image_token_id = self.tokenizer_2.convert_tokens_to_ids(self.trigger_word)
+        image_token_id2 = self.tokenizer.convert_tokens_to_ids(self.trigger_word2)
 
         # Define tokenizers and text encoders
         tokenizers = [self.tokenizer, self.tokenizer_2] if self.tokenizer is not None else [self.tokenizer_2]
@@ -199,22 +202,35 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
                 clean_input_ids = torch.tensor(clean_input_ids, dtype=torch.long).unsqueeze(0)
                 class_tokens_mask = torch.tensor(class_tokens_mask, dtype=torch.bool).unsqueeze(0)
                 
-                prompt_embeds = text_encoder(
-                    clean_input_ids.to(device),
-                    output_hidden_states=True,
-                )
+                # prompt_embeds = text_encoder(
+                #     clean_input_ids.to(device),
+                #     output_hidden_states=True,
+                # )
 
-                # We are only ALWAYS interested in the pooled output of the final text encoder
-                pooled_prompt_embeds = prompt_embeds[0]
-                prompt_embeds = prompt_embeds.hidden_states[-2]
-                prompt_embeds_list.append(prompt_embeds)
+                # # We are only ALWAYS interested in the pooled output of the final text encoder
+                # pooled_prompt_embeds = prompt_embeds[0]
+                # prompt_embeds = prompt_embeds.hidden_states[-2]
+                # prompt_embeds_list.append(prompt_embeds)
+                prompt_embeds_result = text_encoders[idx](
+                    clean_input_ids,
+                    output_hidden_states=True
+                )
+        
+                # Extract embeddings and pooled output
+                pooled_output = prompt_embeds_result[0]
+                embeddings = prompt_embeds_result.hidden_states[-2]
+        
+                prompt_embeds_results.append((embeddings, pooled_output))
 
             prompt_embeds = torch.concat(prompt_embeds_list, dim=-1)
+            prompt_embeds2, pooled_prompt_embeds2 = prompt_embeds_results[1]
 
         prompt_embeds = prompt_embeds.to(dtype=self.text_encoder_2.dtype, device=device)
         class_tokens_mask = class_tokens_mask.to(device=device) # TODO: ignoring two-prompt case
 
-        return prompt_embeds, pooled_prompt_embeds, class_tokens_mask
+        # return prompt_embeds, pooled_prompt_embeds, class_tokens_mask
+        return prompt_embeds, prompt_embeds2, class_tokens_mask, class_tokens_mask2
+
 
 
     @torch.no_grad()
@@ -248,6 +264,7 @@ class PhotoMakerStableDiffusionXLPipeline(StableDiffusionXLPipeline):
         callback_steps: int = 1,
         # Added parameters (for PhotoMaker)
         input_id_images: PipelineImageInput = None,
+        input_id_images2: PipelineImageInput = None,
         start_merge_step: int = 0, # TODO: change to `style_strength_ratio` in the future
         class_tokens_mask: Optional[torch.LongTensor] = None,
         prompt_embeds_text_only: Optional[torch.FloatTensor] = None,
